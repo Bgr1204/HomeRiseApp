@@ -11,34 +11,105 @@ def euro(x):
     except Exception:
         return x
 
+
 def xirr(cashflows):
-    """Compute IRR using Newton's method — stable replacement for np.irr"""
+    """Compute IRR using Newton's method — replacement for np.irr."""
     try:
         guess = 0.1
         for _ in range(100):
-            # NPV and derivative
             npv = sum(cf / ((1 + guess) ** t) for t, cf in enumerate(cashflows))
-            d_npv = sum(-t * cf / ((1 + guess) ** (t + 1)) for t, cf in enumerate(cashflows))
-
+            d_npv = sum(
+                -t * cf / ((1 + guess) ** (t + 1)) for t, cf in enumerate(cashflows)
+            )
             if abs(npv) < 1e-8:
                 return guess
-
             guess = guess - npv / d_npv
-
         return guess
-    except:
+    except Exception:
         return None
+
+
+def mortgage_profiles(loan_amount, annual_rate, years, owner_cost_case3):
+    """
+    Bereken jaarlijkse kosten voor:
+    - HomeRise: kosten alleen in het laatste jaar en alleen bij Case 3 (market CAGR < min IRR)
+    - Aflossingsvrij: alleen rente
+    - Lineair: gelijke aflossing per jaar + rente op resterende schuld
+    - Annuïtair: vaste jaarlijkse betaling
+
+    Alles op jaarbasis (dus: kosten in jaar t, niet cumulatief).
+    """
+    r = annual_rate
+    n = years
+    years_list = list(range(1, n + 1))
+
+    # HomeRise: alleen 'kosten' in laatste jaar, en alleen als owner_cost_case3 > 0
+    hr_costs = []
+    for t in years_list:
+        if t == n and owner_cost_case3 > 0:
+            hr_costs.append(owner_cost_case3)
+        else:
+            hr_costs.append(0.0)
+
+    # Aflossingsvrij: alleen rente
+    io_costs = [loan_amount * r for _ in years_list]
+
+    # Lineair: vaste jaarlijkse aflossing + rente op resterende schuld
+    linear_costs = []
+    yearly_principal = loan_amount / n if n > 0 else 0.0
+    remaining = loan_amount
+    for _ in years_list:
+        interest = remaining * r
+        cost = interest + yearly_principal
+        linear_costs.append(cost)
+        remaining -= yearly_principal
+        remaining = max(remaining, 0.0)
+
+    # Annuïtair: vaste jaarlijkse betaling
+    annuity_costs = []
+    if r == 0 or n == 0:
+        annual_payment = loan_amount / n if n > 0 else 0.0
+    else:
+        annual_payment = loan_amount * (r * (1 + r) ** n) / ((1 + r) ** n - 1)
+
+    remaining = loan_amount
+    for _ in years_list:
+        interest = remaining * r
+        principal = annual_payment - interest
+        remaining -= principal
+        remaining = max(remaining, 0.0)
+        annuity_costs.append(annual_payment)
+
+    df = pd.DataFrame(
+        {
+            "jaar": years_list,
+            "HomeRise (alleen Case 3)": hr_costs,
+            "Aflossingsvrij": io_costs,
+            "Lineair": linear_costs,
+            "Annuïtair": annuity_costs,
+        }
+    )
+
+    return df
+
 
 # ---------- HomeRise core logic ----------
 
 def homerise_simulator(home_value, stake_eur, tenure, market_cagr, min_irr):
     """
     Simpel HomeRise-model:
+
     - HomeRise investeert stake_eur op t=0
     - Woning heeft startwaarde home_value en groeit met market_cagr per jaar
     - HomeRise ontvangt de max van:
         1) minimum IRR floor
         2) percentage van de eindwaarde (stake_pct * V_T)
+
+    'Kosten' voor de eigenaar definiëren we als:
+    - Alleen in Case 3: market CAGR < min IRR
+    - Kosten = floor_payoff - share_payoff (extra waarde die naar HomeRise gaat
+      boven het pro-rata aandeel in de woning)
+    - In Case 1 & 2: kosten = 0 (HomeRise verdient mee met groei die zij mede mogelijk maakt)
     """
 
     if home_value is None or home_value <= 0:
@@ -66,11 +137,11 @@ def homerise_simulator(home_value, stake_eur, tenure, market_cagr, min_irr):
     # Eindwaarde woning
     V_T = values[-1]
 
-    # Scenario 1: minimum IRR floor
-    floor_payoff = stake_eur * (1 + r_min) ** T
-
-    # Scenario 2: percentage van de eindwaarde
+    # Pro-rata payoff (equity share) - wat 'eerlijk' zou zijn als HomeRise puur equity is
     share_payoff = stake_pct * V_T
+
+    # Floor payoff (minimale IRR)
+    floor_payoff = stake_eur * (1 + r_min) ** T
 
     # Werkelijke payoff voor HomeRise
     homerise_payoff = max(floor_payoff, share_payoff)
@@ -81,6 +152,20 @@ def homerise_simulator(home_value, stake_eur, tenure, market_cagr, min_irr):
 
     # Equity voor huiseigenaar bij exit
     owner_exit_equity = V_T - homerise_payoff
+
+    # Kosten voor de eigenaar (alleen Case 3: market CAGR < min IRR => floor > share)
+    owner_cost_case3 = max(floor_payoff - share_payoff, 0.0)
+
+    # Basic eigenaar-metrics (simple benadering)
+    owner_equity_start = V0 - stake_eur  # woningwaarde - HomeRise-inbreng
+    owner_equity_start = max(owner_equity_start, 0.0)
+
+    owner_share_appreciation = owner_exit_equity - owner_equity_start
+    total_appreciation = V_T - V0
+    if total_appreciation > 0:
+        owner_share_of_app = owner_share_appreciation / total_appreciation
+    else:
+        owner_share_of_app = None
 
     df_values = pd.DataFrame(
         {
@@ -99,6 +184,11 @@ def homerise_simulator(home_value, stake_eur, tenure, market_cagr, min_irr):
         "homerise_payoff": homerise_payoff,
         "owner_exit_equity": owner_exit_equity,
         "irr": irr,
+        "owner_cost_case3": owner_cost_case3,
+        "owner_equity_start": owner_equity_start,
+        "owner_share_appreciation": owner_share_appreciation,
+        "total_appreciation": total_appreciation,
+        "owner_share_of_app": owner_share_of_app,
     }
 
     return df_values, summary
@@ -109,7 +199,12 @@ def homerise_simulator(home_value, stake_eur, tenure, market_cagr, min_irr):
 st.set_page_config(page_title="HomeRise Simulator", layout="wide")
 
 st.title("🏡 HomeRise Simulator")
-st.write("Speel met de parameters en zie de payoff en IRR voor HomeRise en de huiseigenaar.")
+st.write(
+    "Vergelijk HomeRise met klassieke hypotheekopties. "
+    "HomeRise biedt kapitaal zonder rente en aflossing; "
+    "de gedefinieerde 'kosten' voor de eigenaar ontstaan alleen in het scenario waarin "
+    "de woning minder hard groeit dan de minimum IRR van HomeRise (Case 3)."
+)
 
 # simple access gate (pas de code aan naar wat jij wilt)
 access_code = st.sidebar.text_input("access code", type="password")
@@ -120,19 +215,18 @@ if access_code != "HR2025":
 
 st.sidebar.header("Invoerparameters")
 
+# Vrije invoer (intypen) voor woningwaarde en HomeRise-kapitaal
 home_value = st.sidebar.number_input(
-    "Woningwaarde vandaag",
-    min_value=50_000.0,
-    max_value=5_000_000.0,
+    "Woningwaarde vandaag (€)",
+    min_value=1.0,
     value=500_000.0,
     step=10_000.0,
     format="%.0f",
 )
 
 stake_eur = st.sidebar.number_input(
-    "HomeRise investering",
+    "HomeRise kapitaal / extra financiering (€)",
     min_value=0.0,
-    max_value=2_000_000.0,
     value=100_000.0,
     step=10_000.0,
     format="%.0f",
@@ -156,6 +250,14 @@ min_irr = st.sidebar.slider(
     step=0.5,
 )
 
+mortgage_rate = st.sidebar.slider(
+    "Hypotheekrente (% per jaar voor vergelijking)",
+    min_value=2.0,
+    max_value=7.0,
+    value=4.5,
+    step=0.1,
+)
+
 # ---------- Berekening & output ----------
 
 try:
@@ -169,13 +271,14 @@ try:
 
     col1, col2 = st.columns(2)
 
+    # ----- HomeRise & eigenaar kernresultaten -----
+
     with col1:
-        st.subheader("Kernresultaten")
+        st.subheader("HomeRise kernresultaten")
 
         st.metric("Startwaarde woning", euro(summary["initial_property_value"]))
         st.metric("Eindwaarde woning", euro(summary["final_property_value"]))
-        st.metric("Payoff HomeRise", euro(summary["homerise_payoff"]))
-        st.metric("Equity huiseigenaar bij exit", euro(summary["owner_exit_equity"]))
+        st.metric("Payoff HomeRise bij exit", euro(summary["homerise_payoff"]))
 
         if summary["irr"] is not None:
             st.metric("IRR HomeRise", f"{summary['irr'] * 100:,.2f}%".replace(",", "."))
@@ -183,18 +286,43 @@ try:
             st.write("IRR kon niet worden berekend (check de input).")
 
         st.write(
-            f"Stake als % van de woning: **{summary['stake_pct'] * 100:,.2f}%**".replace(
+            f"Stake als % van de woning vandaag: **{summary['stake_pct'] * 100:,.2f}%**".replace(
                 ",", "."
             )
         )
 
-        # extra detailregels (optioneel)
         with st.expander("Detail payoff-componenten"):
             st.write(f"Floor payoff (min IRR): {euro(summary['floor_payoff'])}")
-            st.write(f"Share payoff (stake % * eindwaarde): {euro(summary['share_payoff'])}")
-            st.write(f"Initiële investering HomeRise: {euro(summary['stake_eur'])}")
+            st.write(
+                f"Share payoff (stake % * eindwaarde): {euro(summary['share_payoff'])}"
+            )
+            st.write(f"Initiële HomeRise investering: {euro(summary['stake_eur'])}")
+
+            if summary["owner_cost_case3"] > 0:
+                st.write(
+                    f"Extra waarde naar HomeRise in Case 3 (kosten eigenaar): "
+                    f"{euro(summary['owner_cost_case3'])}"
+                )
+            else:
+                st.write(
+                    "In deze configuratie is er geen extra waardeoverdracht naar HomeRise "
+                    "(kosten eigenaar = 0; Case 1 of 2)."
+                )
 
     with col2:
+        st.subheader("Huiseigenaar")
+
+        st.metric("Equity eigenaar bij start", euro(summary["owner_equity_start"]))
+        st.metric("Equity eigenaar bij exit", euro(summary["owner_exit_equity"]))
+
+        if summary["total_appreciation"] > 0 and summary["owner_share_of_app"] is not None:
+            st.metric(
+                "Aandeel eigenaar in waardestijging",
+                f"{summary['owner_share_of_app'] * 100:,.2f}%".replace(",", "."),
+            )
+        else:
+            st.write("Geen positieve waardestijging; aandeel in waardestijging niet van toepassing.")
+
         st.subheader("Waardeontwikkeling woning")
 
         chart_df = df_values.rename(
@@ -203,13 +331,42 @@ try:
         st.line_chart(chart_df.set_index("jaar"))
 
     st.subheader("Waarde per jaar")
-
     df_display = df_values.copy()
     df_display["property_value"] = df_display["property_value"].apply(euro)
     st.dataframe(df_display)
 
+    # ---------- Hypotheekvergelijking: jaarlijkse kosten & cumulatief ----------
+
+    st.subheader("Jaarlijkse kosten: HomeRise vs extra hypotheek")
+
+    cost_df = mortgage_profiles(
+        loan_amount=stake_eur,
+        annual_rate=mortgage_rate / 100.0,
+        years=tenure,
+        owner_cost_case3=summary["owner_cost_case3"],
+    )
+
+    # Tabel met kosten per jaar (niet cumulatief)
+    df_cost_display = cost_df.copy()
+    for col in ["HomeRise (alleen Case 3)", "Aflossingsvrij", "Lineair", "Annuïtair"]:
+        df_cost_display[col] = df_cost_display[col].apply(euro)
+
+    st.write("Jaarlijkse cash out / kosten per optie (bedragen per jaar):")
+    st.dataframe(df_cost_display)
+
+    # Cumulatieve kosten voor de grafiek
+    cost_df_cum = cost_df.copy()
+    for col in ["HomeRise (alleen Case 3)", "Aflossingsvrij", "Lineair", "Annuïtair"]:
+        cost_df_cum[col] = cost_df_cum[col].cumsum()
+
+    st.write("Cumulatieve kosten over de looptijd:")
+    st.line_chart(cost_df_cum.set_index("jaar"))
+
+    st.caption(
+        "De grafiek toont cumulatieve kosten: voor hypotheken zijn dit de som van rente en aflossing, "
+        "voor HomeRise alleen een mogelijke 'kostenpiek' in het laatste jaar in Case 3 "
+        "(wanneer de woning minder hard groeit dan de minimum IRR van HomeRise)."
+    )
+
 except Exception as e:
     st.error(f"Er is een fout opgetreden: {e}")
-
-
-
