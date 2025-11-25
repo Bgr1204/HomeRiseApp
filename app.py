@@ -31,13 +31,15 @@ def xirr(cashflows):
 
 def mortgage_profiles(loan_amount, annual_rate, years, owner_cost_case3):
     """
-    Bereken jaarlijkse kosten voor:
-    - HomeRise: kosten alleen in het laatste jaar en alleen bij Case 3 (market CAGR < min IRR)
-    - Aflossingsvrij: alleen rente
-    - Lineair: gelijke aflossing per jaar + rente op resterende schuld
-    - Annuïtair: vaste jaarlijkse betaling
+    Bereken jaarlijkse 'kosten' als verloren geld:
 
-    Alles op jaarbasis (dus: kosten in jaar t, niet cumulatief).
+    - HomeRise: kosten alleen in het laatste jaar en alleen bij Case 3 (market CAGR < min IRR)
+      => owner_cost_case3
+    - Aflossingsvrij: alleen rente (geen aflossing)
+    - Lineair: alleen rente per jaar (aflossing telt niet als kosten)
+    - Annuïtair: alleen rentecomponent per jaar (aflossing telt niet als kosten)
+
+    Alles op jaarbasis (kosten in jaar t, niet cumulatief).
     """
     r = annual_rate
     n = years
@@ -51,21 +53,21 @@ def mortgage_profiles(loan_amount, annual_rate, years, owner_cost_case3):
         else:
             hr_costs.append(0.0)
 
-    # Aflossingsvrij: alleen rente
+    # Aflossingsvrij: alleen rente, schuld blijft gelijk
     io_costs = [loan_amount * r for _ in years_list]
 
-    # Lineair: vaste jaarlijkse aflossing + rente op resterende schuld
+    # Lineair: alleen rente per jaar, aflossing is vermogensopbouw
     linear_costs = []
     yearly_principal = loan_amount / n if n > 0 else 0.0
     remaining = loan_amount
     for _ in years_list:
         interest = remaining * r
-        cost = interest + yearly_principal
-        linear_costs.append(cost)
+        linear_costs.append(interest)   # alleen rente als 'kosten'
         remaining -= yearly_principal
         remaining = max(remaining, 0.0)
 
-    # Annuïtair: vaste jaarlijkse betaling
+    # Annuïtair: jaarlijkse betaling = rente + aflossing,
+    # maar we tellen alleen de rentecomponent als 'kosten'
     annuity_costs = []
     if r == 0 or n == 0:
         annual_payment = loan_amount / n if n > 0 else 0.0
@@ -78,7 +80,7 @@ def mortgage_profiles(loan_amount, annual_rate, years, owner_cost_case3):
         principal = annual_payment - interest
         remaining -= principal
         remaining = max(remaining, 0.0)
-        annuity_costs.append(annual_payment)
+        annuity_costs.append(interest)  # alleen rente als 'kosten'
 
     df = pd.DataFrame(
         {
@@ -91,7 +93,6 @@ def mortgage_profiles(loan_amount, annual_rate, years, owner_cost_case3):
     )
 
     return df
-
 
 # ---------- HomeRise core logic ----------
 
@@ -370,3 +371,4 @@ try:
 
 except Exception as e:
     st.error(f"Er is een fout opgetreden: {e}")
+
