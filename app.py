@@ -85,6 +85,13 @@ st.set_page_config(page_title="HomeRise Simulator", layout="wide")
 st.title("🏡 HomeRise Simulator")
 st.write("Speel met de parameters en zie de payoff + IRR van HomeRise.")
 
+# simple access gate
+access_code = st.sidebar.text_input("access code", type="password")
+
+if access_code != "HR2025": 
+    st.warning("voer de juiste access code in om de simulator te gebruiken.")
+    st.stop()
+
 st.sidebar.header("Invoerparameters")
 
 home_value = st.sidebar.number_input(
@@ -145,3 +152,4 @@ try:
 
 except Exception as e:
     st.error(f"Fout: {e}")
+
