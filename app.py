@@ -364,11 +364,12 @@ try:
     st.line_chart(cost_df_cum.set_index("jaar"))
 
     st.caption(
-        "De grafiek toont cumulatieve kosten: voor hypotheken zijn dit de som van rente en aflossing, "
+        "De grafiek toont cumulatieve kosten: voor hypotheken is dit enkel de rente, "
         "voor HomeRise alleen een mogelijke 'kostenpiek' in het laatste jaar in Case 3 "
-        "(wanneer de woning minder hard groeit dan de minimum IRR van HomeRise)."
+        "(wanneer de woningwaarde minder hard groeit dan de minimum IRR van HomeRise)."
     )
 
 except Exception as e:
     st.error(f"Er is een fout opgetreden: {e}")
+
 
