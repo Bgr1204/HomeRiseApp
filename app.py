@@ -11,6 +11,23 @@ def euro(x):
     except Exception:
         return x
 
+def xirr(cashflows):
+    """Compute IRR using Newton's method — stable replacement for np.irr"""
+    try:
+        guess = 0.1
+        for _ in range(100):
+            # NPV and derivative
+            npv = sum(cf / ((1 + guess) ** t) for t, cf in enumerate(cashflows))
+            d_npv = sum(-t * cf / ((1 + guess) ** (t + 1)) for t, cf in enumerate(cashflows))
+
+            if abs(npv) < 1e-8:
+                return guess
+
+            guess = guess - npv / d_npv
+
+        return guess
+    except:
+        return None
 
 # ---------- HomeRise core logic ----------
 
@@ -60,10 +77,7 @@ def homerise_simulator(home_value, stake_eur, tenure, market_cagr, min_irr):
 
     # IRR berekenen (cashflows: -stake_eur op t=0, payoff op t=T)
     cashflows = [-stake_eur] + [0.0] * (T - 1) + [homerise_payoff]
-    try:
-        irr = np.irr(cashflows)
-    except Exception:
-        irr = None
+    irr = xirr(cashflows)
 
     # Equity voor huiseigenaar bij exit
     owner_exit_equity = V_T - homerise_payoff
@@ -196,5 +210,6 @@ try:
 
 except Exception as e:
     st.error(f"Er is een fout opgetreden: {e}")
+
 
 
